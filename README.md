@@ -1,6 +1,6 @@
 # Falcon reconciliation take-home
 
-Ingests the Fidelity, Schwab, Salesforce household/account and rep-code files, reconciles them, reports AUM, and offers a small exceptions UI.
+Ingests the Fidelity, Schwab, Salesforce household/account and rep-code files, reconciles them, reports AUM, and offers a small exceptions UI. A short Word submission summary is included as `Falcon_Submission.docx`.
 
 **Start:** 2026-11-22 16:04:25 PST
 **End:** 2026-11-22 17:21:25 PST
