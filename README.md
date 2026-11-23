@@ -3,9 +3,10 @@
 Ingests the Fidelity, Schwab, Salesforce household/account and rep-code files, reconciles them, reports AUM, and offers a small exceptions UI.
 
 **Start:** 2026-11-22 16:04:25 PST
-**End:** 2026-11-22 16:43:05 PST
+**End:** 2026-11-22 17:21:25 PST
+**Duration:** 1 hour 17 minutes
 
-Built with an AI coding agent; `AI_NOTES.md` records the tools, prompts and corrections, including the independent review/fix pass.
+Built with Claude Code; `AI_NOTES.md` records the tools, prompts and corrections, including the review/fix pass.
 
 ## Run it
 
