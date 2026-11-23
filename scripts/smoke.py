@@ -8,8 +8,8 @@ def get(c):
 
 for u in ["ops", "dana"]:
     h = get(cookie(u))
-    total = re.search(r"Grand total.*?<b>(\$[^<]+)</b>", h, re.S)
-    print(u, "exception rows:", len(re.findall(r'class="tag', h)), "| total:", total.group(1) if total else None,
+    total = re.search(r"Grand total.*?<strong[^>]*>(\$[^<]+)</strong>", h, re.S)
+    print(u, "exception rows:", h.count('class="exception-row"'), "| total:", total.group(1) if total else None,
           "| audit log shown:", "Audit log" in h, "| approve buttons:", "Approve" in h)
 h = urllib.request.urlopen(urllib.request.Request("http://localhost:3111/", headers={"Cookie": "falcon_session=ops.bad"})).read().decode()
-print("forged cookie page is login redirect:", "Sign in (mock)" in h)
+print("forged cookie page is login redirect:", "Mock authentication" in h)
