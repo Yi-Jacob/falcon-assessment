@@ -1,6 +1,7 @@
 node_modules
 .next
 *.db
+!data/falcon-demo.db
 *.db-shm
 *.db-wal
 next-env.d.ts

@@ -13,9 +13,12 @@ export const SEEDED_USERS: User[] = [
 ];
 
 const DEV_SECRET = "dev-only-mock-secret-change-me";
+const VERCEL_DEMO_SECRET = "falcon-vercel-mock-auth-demo";
 const secret = () => {
   const configured = process.env.SESSION_SECRET;
   if (configured) return configured;
+  // The Vercel preview is a mock-auth demo. A real deployment should set SESSION_SECRET.
+  if (process.env.VERCEL) return VERCEL_DEMO_SECRET;
   if (process.env.NODE_ENV === "production") throw new Error("SESSION_SECRET must be set in production");
   return DEV_SECRET;
 };

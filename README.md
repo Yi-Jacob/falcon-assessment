@@ -23,7 +23,9 @@ The app is at <http://localhost:3111>. It uses mock sign-in with seeded users: O
 
 Always run the app from the repo root, or set `FALCON_DB` to an absolute path. Otherwise SQLite creates an empty DB in whatever folder you started from.
 
-Production refuses to sign a session cookie unless `SESSION_SECRET` is set. The command above uses a local-only value; replace it outside local development. Set `COOKIE_SECURE=1` behind HTTPS.
+Outside the Vercel preview, production refuses to sign a session cookie unless `SESSION_SECRET` is set. The command above uses a local-only value; replace it outside local development. Set `COOKIE_SECURE=1` behind HTTPS.
+
+The Vercel preview is a mock-auth demo: it uses a demo-only cookie fallback and copies `data/falcon-demo.db` to `/tmp/falcon.db` on first use. Set `SESSION_SECRET` in Vercel for a real deployment. Local runs keep using `falcon.db` and `npm run ingest`.
 
 ## Data model (`src/lib/db/schema.ts`)
 

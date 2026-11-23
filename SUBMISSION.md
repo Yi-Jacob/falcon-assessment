@@ -17,6 +17,8 @@ A small operations tool for the take-home scenario. It ingests the Fidelity, Sch
 
 Nothing is written back to Salesforce or either custodian. The AI feature is an offline mock and is advisory only.
 
+The Vercel preview copies the bundled `data/falcon-demo.db` to `/tmp/falcon.db` on first use and uses a demo-only cookie fallback; local runs use `falcon.db` and `npm run ingest`.
+
 ## At a glance
 
 | Area | Delivered |
@@ -83,7 +85,7 @@ The transfer-overlap review pair has combined flagged balances of $4,409,175.42;
 - Mock sign-in uses an HMAC-signed, HTTP-only cookie. Roles are enforced in server pages and server actions; the cookie only holds a seeded user id.
 - Advisors cannot view, explain, propose against, or resolve another advisor’s data. Operations-only actions are checked server-side.
 - Approvals and resolutions write local audit rows with before/after JSON. Approvals can be undone. Nothing is written back to Salesforce or a custodian.
-- Production refuses to sign a session cookie without `SESSION_SECRET`. `COOKIE_SECURE=1` enables the Secure flag behind HTTPS.
+- Outside the Vercel preview, production refuses to sign a session cookie without `SESSION_SECRET`; the Vercel preview uses a demo-only fallback because auth is mock. `COOKIE_SECURE=1` enables the Secure flag behind HTTPS.
 - The AI prompt contains only structured, minimised fields. Tax IDs, SSN fragments, emails, Salesforce notes and free-text exception reasons are excluded; the account number is masked. Output is strict-Zod-validated with a safe fallback, and there is no code path that applies it.
 - The prompt-injection text in the Salesforce notes is treated as data, flagged `suspicious_note_content`, and never sent to the model.
 
