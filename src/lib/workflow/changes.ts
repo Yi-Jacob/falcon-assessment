@@ -34,6 +34,28 @@ export function propose(db: Db, user: User, raw: unknown, reason: string, result
   })();
 }
 
+export type ResolutionAction = "resolve" | "reopen";
+
+/** Local exception resolution state. Never writes back to Salesforce or a custodian. */
+export function resolveException(
+  db: Db, user: User, entityKey: string, code: string, action: ResolutionAction, note: string, results: Result[], now = new Date().toISOString(),
+) {
+  if (!canApprove(user)) throw new Error("forbidden");
+  const result = results.find((r) => r.entityKey === entityKey);
+  if (!result || !result.exceptions.some((e) => e.code === code)) throw new Error("unknown exception");
+  if (action !== "resolve" && action !== "reopen") throw new Error("invalid action");
+  const status = action === "resolve" ? "resolved" : "reopened";
+  const safeNote = note.slice(0, 500);
+  db.transaction(() => {
+    const before = db.prepare("SELECT status, note FROM exception_resolutions WHERE entity_key=? AND code=?").get(entityKey, code) ?? null;
+    db.prepare(`
+      INSERT INTO exception_resolutions(entity_key,code,status,actor,at,note) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(entity_key,code) DO UPDATE SET status=excluded.status, actor=excluded.actor, at=excluded.at, note=excluded.note
+    `).run(entityKey, code, status, user.id, now, safeNote);
+    audit(db, now, user.id, action, `exception:${entityKey}:${code}`, before, { status, note: safeNote });
+  })();
+}
+
 export function decide(db: Db, user: User, changeId: number, action: "approve" | "reject" | "undo", now = new Date().toISOString()) {
   if (!canApprove(user)) throw new Error("forbidden");
   db.transaction(() => {

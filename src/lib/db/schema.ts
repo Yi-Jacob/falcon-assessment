@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS import_batches (
   id INTEGER PRIMARY KEY,
   started_at TEXT NOT NULL
 );
+CREATE TRIGGER IF NOT EXISTS import_batches_no_update BEFORE UPDATE ON import_batches BEGIN SELECT RAISE(ABORT,'import_batches is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS import_batches_no_delete BEFORE DELETE ON import_batches BEGIN SELECT RAISE(ABORT,'import_batches is immutable'); END;
 CREATE TABLE IF NOT EXISTS raw_files (
   id INTEGER PRIMARY KEY,
   batch_id INTEGER NOT NULL REFERENCES import_batches(id),
@@ -109,7 +111,7 @@ CREATE TABLE IF NOT EXISTS recon_results (
   household_sf_id TEXT,
   sf_account_ids TEXT NOT NULL,        -- JSON array
   observation_ids TEXT NOT NULL,       -- JSON array (all lineage incl. duplicates)
-  raw_row_refs TEXT NOT NULL,          -- JSON array of {file,row}
+  raw_row_refs TEXT NOT NULL,          -- JSON array of "filename#row" strings
   UNIQUE (run_id, entity_key)
 );
 CREATE TABLE IF NOT EXISTS recon_exceptions (
@@ -122,10 +124,15 @@ CREATE TABLE IF NOT EXISTS recon_exceptions (
 );
 
 -- ============ LOCAL WORKFLOW (never written back to Salesforce/custodians) ============
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('operations','advisor')),
-  advisor_name TEXT
+-- Mock users are code-defined in src/lib/auth/session.ts; no DB users table is needed.
+CREATE TABLE IF NOT EXISTS exception_resolutions (
+  entity_key TEXT NOT NULL,
+  code TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('resolved','reopened')),
+  actor TEXT NOT NULL,
+  at TEXT NOT NULL,
+  note TEXT,
+  PRIMARY KEY (entity_key, code)
 );
 CREATE TABLE IF NOT EXISTS proposed_changes (
   id INTEGER PRIMARY KEY,

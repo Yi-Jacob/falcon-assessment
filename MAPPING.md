@@ -43,7 +43,7 @@
 | `Registration_Type__c` | `registration` | `Joint`, `Trust`, `Individual`, `IRA`, `Roth IRA`, `SEP IRA`. |
 | `Status__c` | `status` | `Open`, `Transferring`, `Closed`. Closed with a custodian balance gives `status_conflict`. |
 | `Notes__c` | `notes` | Untrusted free text. Used only for regex flags (transfer words, instruction-like text). Never sent to a model. |
-| `rep_codes.*` | `rep_code_map` (custodian, rep_code) → advisor | Rep code alone is not unique across custodians (WF7 is Fidelity, DW01 is Schwab). |
+| `rep_codes.*` | `rep_code_map` (custodian, rep_code) → advisor | Rep codes are scoped by custodian; the key is the pair, not the code alone. |
 
 ## Registration mapping table (`REGISTRATION_MAP` in `src/lib/ingest/normalize.ts`)
 

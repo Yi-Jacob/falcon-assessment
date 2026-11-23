@@ -22,9 +22,11 @@ export interface Exc { code: string; severity: Severity; reason: string }
 export interface Result {
   entityKey: string; custodian: Cust | null; accountKey: string | null; status: Status;
   balanceCents: number | null; inAum: boolean; valuationDate: string | null; repCode: string | null;
-  custodianAdvisor: string | null; sfAdvisor: string | null; householdId: string | null;
+  custodianAdvisor: string | null; sfAdvisor: string | null; sfAdvisors?: string[]; householdId: string | null;
   sfAccountIds: string[]; observationIds: number[]; rawRefs: string[]; ownerDisplay: string | null;
   exceptions: Exc[];
+  /** Entity keys of suspected transfer-overlap counterparts; used to count exposure once per pair. */
+  transferOverlapCounterparts?: string[];
 }
 export const UNASSIGNED = "Unassigned";
 export const repKey = (c: string, code: string) => `${c}|${code.toUpperCase()}`;
@@ -43,11 +45,11 @@ export function reconcile(input: ReconInput): Result[] {
   const hh = new Map(households.map((h) => [h.sfId, h]));
   const results: Result[] = [];
 
-  const validObs = observations.filter((o) => o.accountKey && o.valuationDate !== undefined);
+  const keyedObs = observations.filter((o) => o.accountKey);
   const snapshot: Partial<Record<Cust, string>> = {};
   for (const o of observations) if (o.valuationDate && (!snapshot[o.custodian] || o.valuationDate > snapshot[o.custodian]!)) snapshot[o.custodian] = o.valuationDate;
 
-  const obsByKey = group(validObs, (o) => `${o.custodian}|${o.accountKey}`);
+  const obsByKey = group(keyedObs, (o) => `${o.custodian}|${o.accountKey}`);
   const sfValid = sfAccounts.filter((s) => s.custodian && s.accountKey);
   const sfByKey = group(sfValid, (s) => `${s.custodian}|${s.accountKey}`);
 
@@ -68,7 +70,10 @@ export function reconcile(input: ReconInput): Result[] {
     const group_ = obsByKey.get(key) ?? [];
     const sfs = sfByKey.get(key) ?? [];
     const exceptions: Exc[] = [];
-    const add = (code: string, severity: Severity, reason: string) => exceptions.push({ code, severity, reason });
+    const add = (code: string, severity: Severity, reason: string) => {
+      // A result may see the same signal from several source rows; keep one row per code.
+      if (!exceptions.some((e) => e.code === code)) exceptions.push({ code, severity, reason });
+    };
 
     // ---- duplicate detection BEFORE any join ----
     let used: Obs | null = null;
@@ -76,19 +81,38 @@ export function reconcile(input: ReconInput): Result[] {
     let inAum = false;
     let date: string | null = null;
     if (group_.length) {
-      date = group_.reduce((m, o) => (o.valuationDate! > m ? o.valuationDate! : m), group_[0].valuationDate ?? "");
-      const latest = group_.filter((o) => o.valuationDate === date);
-      const older = group_.length - latest.length;
-      if (older) add("superseded_observation", "info", `${older} older observation(s) for this account retained as lineage but not counted.`);
-      if (latest.length > 1) {
-        if (new Set(latest.map(obsSig)).size === 1) {
-          add("exact_duplicate", "review", `${latest.length} identical rows for the same account/date; balance counted once, all rows retained as lineage.`);
-          used = latest[0];
-        } else {
-          add("conflicting_duplicate", "error", `${latest.length} rows for the same account/date disagree; no winner chosen, value excluded from AUM.`);
-        }
-      } else used = latest[0];
-      if (date && snapshot[custodian] && date < snapshot[custodian]!) add("mixed_valuation_dates", "review", `Latest observation ${date} is older than the ${custodian} snapshot ${snapshot[custodian]}.`);
+      const dated = group_.filter((o) => o.valuationDate != null);
+      const undated = group_.filter((o) => o.valuationDate == null);
+      if (undated.length) {
+        add("missing_valuation_date", "review",
+          `${undated.length} observation(s) for this account have no usable valuation date; ` +
+          (dated.length ? "retained as lineage and not counted because dated rows exist." : "counted with an unknown as-of date."));
+      }
+      if (dated.length) {
+        date = dated.reduce((m, o) => (o.valuationDate! > m ? o.valuationDate! : m), dated[0].valuationDate!);
+        const latest = dated.filter((o) => o.valuationDate === date);
+        const older = dated.length - latest.length;
+        if (older) add("superseded_observation", "info", `${older} older observation(s) for this account retained as lineage but not counted.`);
+        if (latest.length > 1) {
+          if (new Set(latest.map(obsSig)).size === 1) {
+            add("exact_duplicate", "review", `${latest.length} identical rows for the same account/date; balance counted once, all rows retained as lineage.`);
+            used = latest[0];
+          } else {
+            add("conflicting_duplicate", "error", `${latest.length} rows for the same account/date disagree; no winner chosen, value excluded from AUM.`);
+          }
+        } else used = latest[0];
+        if (snapshot[custodian] && date < snapshot[custodian]!) add("mixed_valuation_dates", "review", `Latest observation ${date} is older than the ${custodian} snapshot ${snapshot[custodian]}.`);
+      } else if (undated.length) {
+        // No dated rows: these are the only observations. Count one if they agree.
+        if (undated.length > 1) {
+          if (new Set(undated.map(obsSig)).size === 1) {
+            add("exact_duplicate", "review", `${undated.length} identical rows for the same account with no valuation date; balance counted once, all rows retained as lineage.`);
+            used = undated[0];
+          } else {
+            add("conflicting_duplicate", "error", `${undated.length} rows for the same account with no valuation date disagree; no winner chosen, value excluded from AUM.`);
+          }
+        } else used = undated[0];
+      }
       if (used) {
         if (used.balanceCents == null) add("missing_balance", "review", "Balance is blank or malformed; treated as unknown (not zero) and excluded from AUM.");
         else {
@@ -107,6 +131,7 @@ export function reconcile(input: ReconInput): Result[] {
     }
     const sfHh = sfs.length ? hh.get(sfs[0].householdId) : undefined;
     const sfAdvisor = sfHh?.advisorName ?? null;
+    const sfAdvisors = [...new Set(sfs.map((s) => hh.get(s.householdId)?.advisorName).filter((x): x is string => !!x))];
     if (sfs.length && !sfHh) add("orphan_household_link", "error", "Salesforce account points to a household id not present in sf_households.");
     if (custAdvisor && custAdvisor !== UNASSIGNED && sfAdvisor && custAdvisor !== sfAdvisor)
       add("advisor_mismatch", "review", `Custodian rep code maps to ${custAdvisor}, Salesforce household owner is ${sfAdvisor}. AUM follows the custodian mapping.`);
@@ -138,7 +163,7 @@ export function reconcile(input: ReconInput): Result[] {
 
     const r: Result = {
       entityKey: key, custodian, accountKey, status, balanceCents: balance, inAum, valuationDate: date, repCode: rep,
-      custodianAdvisor: custAdvisor, sfAdvisor, householdId: sfs[0]?.householdId ?? null,
+      custodianAdvisor: custAdvisor, sfAdvisor, sfAdvisors, householdId: sfs[0]?.householdId ?? null,
       sfAccountIds: sfs.map((s) => s.sfId), observationIds: group_.map((o) => o.id), rawRefs: [...group_.map((o) => o.rawRef), ...sfs.map((s) => s.rawRef)],
       ownerDisplay: (used ?? group_[0])?.ownerDisplay ?? null, exceptions,
     };
@@ -190,6 +215,8 @@ export function reconcile(input: ReconInput): Result[] {
         const reason = `Possible double count with ${t.custodian} ${t.accountKey} (transfer in flight; same owner name, registration, balance within ${TRANSFER_BALANCE_TOLERANCE * 100}%). Not adjusted; needs human confirmation.`;
         addExc(r, "possible_transfer_overlap", "review", reason);
         addExc(t, "possible_transfer_overlap", "review", `Counterpart ${r.custodian} ${r.accountKey} may hold the same assets.`);
+        (r.transferOverlapCounterparts ??= []).push(t.entityKey);
+        (t.transferOverlapCounterparts ??= []).push(r.entityKey);
       }
     }
   }

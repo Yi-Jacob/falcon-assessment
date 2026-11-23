@@ -44,33 +44,39 @@ export function parseCsvRaw(bytes: Buffer): Record<string, string>[] {
 
 export function ingestFiles(db: Db, files: IngestFile[], now = new Date().toISOString()): IngestSummary[] {
   const out: IngestSummary[] = [];
-  const run = db.transaction(() => {
-    const batchId = Number(db.prepare("INSERT INTO import_batches(started_at) VALUES (?)").run(now).lastInsertRowid);
-    // rep codes first so advisors exist, then households, then the rest
-    const order: SourceType[] = ["rep_codes", "sf_households", "sf_financial_accounts", "fidelity", "schwab"];
-    for (const f of [...files].sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type))) {
+  // rep codes first so advisors exist, then households, then the rest
+  const order: SourceType[] = ["rep_codes", "sf_households", "sf_financial_accounts", "fidelity", "schwab"];
+  const prepared = [...files]
+    .sort((a, b) => order.indexOf(a.type) - order.indexOf(b.type))
+    .map((f) => {
       const bytes = readFileSync(f.path);
-      const sha = createHash("sha256").update(bytes).digest("hex");
-      const filename = basename(f.path);
-      const existing = db.prepare("SELECT id FROM raw_files WHERE sha256 = ?").get(sha);
+      return { f, bytes, sha: createHash("sha256").update(bytes).digest("hex"), filename: basename(f.path) };
+    });
+
+  const run = db.transaction(() => {
+    // Create a batch only when at least one new file is actually imported.
+    let batchId: number | null = null;
+    const getBatch = () => (batchId ??= Number(db.prepare("INSERT INTO import_batches(started_at) VALUES (?)").run(now).lastInsertRowid));
+    for (const p of prepared) {
+      const existing = db.prepare("SELECT id FROM raw_files WHERE sha256 = ?").get(p.sha);
       if (existing) {
-        out.push({ file: filename, status: "skipped_identical", rows: 0, sha256: sha });
+        out.push({ file: p.filename, status: "skipped_identical", rows: 0, sha256: p.sha });
         continue;
       }
-      const rows = parseCsvRaw(bytes);
-      const shape = SHAPES[f.type];
+      const rows = parseCsvRaw(p.bytes);
+      const shape = SHAPES[p.f.type];
       rows.forEach((r, i) => {
         const res = shape.safeParse(r);
-        if (!res.success) throw new Error(`${filename} row ${i + 1}: unexpected columns (${res.error.issues[0]?.path.join(",")})`);
+        if (!res.success) throw new Error(`${p.filename} row ${i + 1}: unexpected columns (${res.error.issues[0]?.path.join(",")})`);
       });
       const fileId = Number(
         db.prepare("INSERT INTO raw_files(batch_id,source_type,filename,sha256,byte_size,content,ingested_at) VALUES (?,?,?,?,?,?,?)")
-          .run(batchId, f.type, filename, sha, bytes.length, bytes, now).lastInsertRowid,
+          .run(getBatch(), p.f.type, p.filename, p.sha, p.bytes.length, p.bytes, now).lastInsertRowid,
       );
       const insRow = db.prepare("INSERT INTO raw_rows(file_id,row_number,values_json) VALUES (?,?,?)");
       const rawIds = rows.map((r, i) => Number(insRow.run(fileId, i + 1, JSON.stringify(r)).lastInsertRowid));
-      buildCanonical(db, f.type, rows, rawIds);
-      out.push({ file: filename, status: "imported", rows: rows.length, sha256: sha });
+      buildCanonical(db, p.f.type, rows, rawIds);
+      out.push({ file: p.filename, status: "imported", rows: rows.length, sha256: p.sha });
     }
   });
   run();

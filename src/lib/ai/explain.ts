@@ -6,7 +6,7 @@ export const ExplanationSchema = z.object({
   likelyCause: z.string().max(600),
   suggestedAction: z.enum(["none", "link_account_to_household", "merge_households", "contact_custodian", "fix_in_salesforce", "manual_review"]),
   confidence: z.enum(["low", "medium", "high"]),
-});
+}).strict();
 export type Explanation = z.infer<typeof ExplanationSchema>;
 
 export interface LlmProvider { name: string; complete(prompt: ModelPrompt): Promise<unknown> }
@@ -14,9 +14,9 @@ export interface ModelPrompt { system: string; user: string }
 
 /** Only structured, minimised facts go to a model. Tax IDs, SSN fragments, emails and free-text Salesforce notes are never included. */
 export function buildPrompt(r: Result, code: string): ModelPrompt {
-  const e = r.exceptions.find((x) => x.code === code);
+  // Deliberately omit free-text exception reasons: they can contain full account numbers.
   const facts = {
-    exceptionCode: code, systemReason: e?.reason ?? null, status: r.status, custodian: r.custodian,
+    exceptionCode: code, status: r.status, custodian: r.custodian,
     accountNumberMasked: r.accountKey ? `****${r.accountKey.slice(-4)}` : null, valuationDate: r.valuationDate,
     hasBalance: r.balanceCents != null, custodianAdvisor: r.custodianAdvisor, salesforceAdvisor: r.sfAdvisor,
     otherExceptionCodes: r.exceptions.map((x) => x.code),
@@ -44,6 +44,7 @@ export const mockProvider: LlmProvider = {
       missing_balance: ["No balance reported; excluded from AUM.", "Custodian export gap.", "contact_custodian"],
       negative_balance: ["Negative balance reported.", "Possible margin debit.", "manual_review"],
       exact_duplicate: ["The custodian file repeats this row exactly.", "Export duplication.", "contact_custodian"],
+      missing_valuation_date: ["The custodian row has no usable valuation date.", "Export or parsing gap; the as-of date is unknown.", "contact_custodian"],
     };
     const [summary, likelyCause, suggestedAction] = table[facts.exceptionCode] ?? ["Exception needs a human look.", "Unknown.", "manual_review"];
     return { summary, likelyCause, suggestedAction, confidence: "low" };

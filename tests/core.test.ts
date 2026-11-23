@@ -22,6 +22,7 @@ describe("normalization", () => {
     expect(parseMoneyToCents("218378.5")).toEqual({ kind: "ok", cents: 21837850 });
     expect(parseMoneyToCents("")).toEqual({ kind: "blank" });
     expect(parseMoneyToCents("12abc").kind).toBe("invalid");
+    expect(parseMoneyToCents("999999999999999999.99").kind).toBe("invalid");
   });
   it("parses explicit date formats and rejects impossible dates", () => {
     expect(parseDate("11/06/2026", "mdy")).toBe("2026-11-06");
@@ -88,6 +89,36 @@ describe("reconciliation", () => {
     expect(aum.grandTotalCents).toBe(0);
     expect(aum.coverage.salesforceOnlyNotCounted).toBe(1);
   });
+  it("emits one exception per code when both registrations are unknown", () => {
+    const r = reconcile(base({ observations: [obs(1, { registration: "unknown" })], sfAccounts: [sf({ registration: "unknown" })] }));
+    expect(r[0].exceptions.filter((e) => e.code === "unknown_registration")).toHaveLength(1);
+  });
+  it("flags a missing valuation date instead of calling the row superseded", () => {
+    const r = reconcile(base({ observations: [obs(1, { valuationDate: null })] }));
+    const codes = r[0].exceptions.map((e) => e.code);
+    expect(codes).toContain("missing_valuation_date");
+    expect(codes).not.toContain("superseded_observation");
+    expect(r[0].balanceCents).toBe(10000);
+    expect(r[0].inAum).toBe(true);
+    expect(r[0].valuationDate).toBeNull();
+  });
+  it("keeps undated rows as lineage when dated rows exist", () => {
+    const r = reconcile(base({ observations: [obs(1, { valuationDate: null, balanceCents: 1 }), obs(2)] }));
+    expect(r[0].exceptions.map((e) => e.code)).toContain("missing_valuation_date");
+    expect(r[0].balanceCents).toBe(10000);
+  });
+  it("counts transfer-overlap exposure once per pair, using the smaller side", () => {
+    const r = reconcile(base({
+      observations: [
+        obs(1, { custodian: "Schwab", accountKey: "S1", balanceCents: 10000, ownerNameKey: "mbeki", registration: "trust", repCode: "DW01" }),
+        obs(2, { custodian: "Fidelity", accountKey: "F1", balanceCents: 10500, ownerNameKey: "mbeki", registration: "trust", repCode: "WF7" }),
+      ],
+      sfAccounts: [sf({ custodian: "Schwab", accountKey: "S1", registration: "trust", status: "Transferring", notes: "ACAT to Fidelity" })],
+    }));
+    const aum = computeAum(r);
+    expect(aum.unresolved.transferOverlapAccounts).toBe(2);
+    expect(aum.unresolved.transferOverlapExposureCents).toBe(10000);
+  });
 });
 
 describe("ingestion", () => {
@@ -97,14 +128,18 @@ describe("ingestion", () => {
     ingestFiles(db, files);
     const first = runReconciliation(db);
     const total1 = computeAum(first.results).grandTotalCents;
+    expect((db.prepare("SELECT COUNT(*) c FROM import_batches").get() as any).c).toBe(1);
     const again = ingestFiles(db, files);
     expect(again.every((s) => s.status === "skipped_identical")).toBe(true);
+    expect((db.prepare("SELECT COUNT(*) c FROM import_batches").get() as any).c).toBe(1); // no empty batch on a no-op
     const second = runReconciliation(db);
     expect(second.reused).toBe(true);
     expect(computeAum(second.results).grandTotalCents).toBe(total1);
     expect((db.prepare("SELECT COUNT(*) c FROM custodian_observations").get() as any).c).toBe(65);
     expect(() => db.prepare("UPDATE raw_rows SET values_json='x'").run()).toThrow(/immutable/);
     expect(() => db.prepare("DELETE FROM raw_files").run()).toThrow(/immutable/);
+    expect(() => db.prepare("UPDATE import_batches SET started_at='x'").run()).toThrow(/immutable/);
+    expect(() => db.prepare("DELETE FROM import_batches").run()).toThrow(/immutable/);
     // every raw custodian row and every SF account is represented in results
     const covered = new Set(second.results.flatMap((r) => r.observationIds));
     expect(covered.size).toBe(65);

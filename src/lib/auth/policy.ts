@@ -3,9 +3,12 @@ import type { User } from "./session";
 import type { Result } from "../reconciliation/reconcile";
 
 /** Advisors see results tied to their own households; unlinked custodian accounts are visible to the custodian-mapped advisor. */
-export function canView(user: User, r: Pick<Result, "sfAdvisor" | "householdId" | "custodianAdvisor">): boolean {
+export function canView(user: User, r: Pick<Result, "sfAdvisor" | "sfAdvisors" | "householdId" | "custodianAdvisor">): boolean {
   if (user.role === "operations") return true;
-  if (r.householdId) return r.sfAdvisor === user.advisorName;
+  if (r.householdId) {
+    if (user.advisorName == null) return false;
+    return (r.sfAdvisors ?? []).includes(user.advisorName) || r.sfAdvisor === user.advisorName;
+  }
   return r.custodianAdvisor === user.advisorName;
 }
 

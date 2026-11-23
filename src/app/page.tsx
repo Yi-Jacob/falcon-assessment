@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { COOKIE, currentUser, getDb, loadResults } from "./server-util";
 import { canApprove, canView } from "../lib/auth/policy";
 import { computeAum, fmtMoney } from "../lib/reconciliation/aum";
-import { decide, propose } from "../lib/workflow/changes";
+import { decide, propose, resolveException } from "../lib/workflow/changes";
 import { explain } from "../lib/ai/explain";
 
 export const runtime = "nodejs";
@@ -38,6 +38,20 @@ async function decideAction(formData: FormData) {
   decide(getDb(), user, Number(formData.get("id")), String(formData.get("action")) as "approve" | "reject" | "undo");
   revalidatePath("/");
 }
+async function resolveAction(formData: FormData) {
+  "use server";
+  const user = await currentUser();
+  if (!user) redirect("/login");
+  const { results } = loadResults();
+  const action = String(formData.get("action"));
+  if (action !== "resolve" && action !== "reopen") throw new Error("invalid action");
+  resolveException(
+    getDb(), user,
+    String(formData.get("entityKey")), String(formData.get("code")),
+    action, String(formData.get("note") ?? ""), results,
+  );
+  revalidatePath("/");
+}
 
 export default async function Home({ searchParams }: { searchParams: Promise<{ explain?: string }> }) {
   const user = await currentUser();
@@ -47,7 +61,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
   const db = getDb();
   const visible = results.filter((r) => canView(user, r));
   const withExc = visible.filter((r) => r.exceptions.length);
-  const aum = computeAum(visible);
+  // AUM follows the custodian rep-code mapping. The exception table follows visibility.
+  const aumResults = user.role === "advisor" ? results.filter((r) => r.custodianAdvisor === user.advisorName) : results;
+  const aum = computeAum(aumResults);
+  const resolutions = new Map(
+    (db.prepare("SELECT entity_key, code, status FROM exception_resolutions").all() as any[])
+      .map((x) => [`${x.entity_key}::${x.code}`, x.status as "resolved" | "reopened"]),
+  );
   const households = (db.prepare("SELECT sf_id, name, primary_advisor_name a FROM households ORDER BY name").all() as any[]).filter((h) => user.role === "operations" || h.a === user.advisorName);
   const changes = (db.prepare("SELECT * FROM proposed_changes ORDER BY id DESC").all() as any[]).filter((c) => user.role === "operations" || c.proposed_by === user.id);
   const audit = user.role === "operations" ? (db.prepare("SELECT * FROM audit_events ORDER BY id DESC LIMIT 30").all() as any[]) : [];
@@ -64,10 +84,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
       <p>Signed in as <b>{user.name}</b> ({user.role}) <form action={logout} style={{ display: "inline" }}><button>Sign out</button></form></p>
       <h1>Exceptions</h1>
       <div className="warn"><b>{aum.label}</b><br />
-        Grand total ({user.role === "advisor" ? "your accounts" : "all"}): <b>{fmtMoney(aum.grandTotalCents)}</b>.
+        Grand total ({user.role === "advisor" ? "your custodian-attributed accounts" : "all"}): <b>{fmtMoney(aum.grandTotalCents)}</b>.
         {" "}Custodian snapshots: {Object.entries(aum.byCustodian).map(([c, v]) => `${c} ${v.snapshotDate}`).join(", ")}.
         {" "}Counted {aum.coverage.included} accounts; excluded {aum.coverage.excluded}.
         {" "}Possible transfer overlap exposure (not adjusted): {fmtMoney(aum.unresolved.transferOverlapExposureCents)}.
+        {user.role === "advisor" && " The exception table shows your households; the total uses the custodian rep-code mapping."}
       </div>
       {explained && (
         <div className="warn"><b>AI explanation</b> (provider {explained.provider}, schema-validated: {String(explained.validated)}; advisory only, never auto-applied)
@@ -83,9 +104,23 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ e
               <td>{r.status}</td>
               <td>{r.balanceCents == null ? "unknown" : fmtMoney(r.balanceCents)}</td>
               <td>{r.custodianAdvisor ?? "-"} / {r.sfAdvisor ?? "-"}</td>
-              <td>{r.exceptions.map((e) => (
-                <div key={e.code}><span className={`tag ${e.severity}`}>{e.code}</span> {e.reason} <a href={`/?explain=${encodeURIComponent(r.entityKey + "::" + e.code)}`}>explain</a></div>
-              ))}</td>
+              <td>{r.exceptions.map((e) => {
+                const resolutionKey = `${r.entityKey}::${e.code}`;
+                const resolved = resolutions.get(resolutionKey) === "resolved";
+                return (
+                  <div key={e.code}><span className={`tag ${e.severity}`}>{e.code}</span> {e.reason} <a href={`/?explain=${encodeURIComponent(r.entityKey + "::" + e.code)}`}>explain</a>
+                    {resolved && <span className="tag info">resolved</span>}
+                    {canApprove(user) && (
+                      <form action={resolveAction} style={{ display: "inline", marginLeft: 6 }}>
+                        <input type="hidden" name="entityKey" value={r.entityKey} />
+                        <input type="hidden" name="code" value={e.code} />
+                        <input name="note" placeholder="note" size={10} />
+                        <button name="action" value={resolved ? "reopen" : "resolve"}>{resolved ? "Reopen" : "Resolve"}</button>
+                      </form>
+                    )}
+                  </div>
+                );
+              })}</td>
               <td><small>{r.rawRefs.join(", ")}</small></td>
             </tr>
           ))}

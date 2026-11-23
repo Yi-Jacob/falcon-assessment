@@ -7,7 +7,7 @@ export interface AumReport {
   grandTotalCents: number;
   byCustodian: Record<string, Bucket & { snapshotDate: string | null; excludedUnknownBalance: number; excludedConflicting: number; negativeAccounts: number; custodianOnlyIncluded: number }>;
   byAdvisor: Record<string, Bucket>;
-  coverage: { custodianAccountsTotal: number; included: number; excluded: number; salesforceOnlyNotCounted: number };
+  coverage: { custodianAccountsTotal: number; included: number; excluded: number; salesforceOnlyNotCounted: number; invalidIdentity: number };
   unresolved: {
     conflictingDuplicates: number; exactDuplicatesCollapsed: number;
     transferOverlapAccounts: number; transferOverlapExposureCents: number;
@@ -19,13 +19,16 @@ export function computeAum(results: Result[]): AumReport {
   const byCustodian: AumReport["byCustodian"] = {};
   const byAdvisor: AumReport["byAdvisor"] = {};
   let grand = 0;
-  let total = 0, included = 0, sfOnly = 0;
+  let total = 0, included = 0, sfOnly = 0, invalid = 0;
   const unresolved = { conflictingDuplicates: 0, exactDuplicatesCollapsed: 0, transferOverlapAccounts: 0, transferOverlapExposureCents: 0 };
   const dis = { count: 0, balanceCents: 0 };
   const has = (r: Result, c: string) => r.exceptions.some((e) => e.code === c);
+  const byKey = new Map(results.map((r) => [r.entityKey, r]));
+  const countedTransferPairs = new Set<string>();
 
   for (const r of results) {
     if (r.status === "salesforce_only") { sfOnly++; continue; }
+    if (r.status === "invalid_identity") { invalid++; continue; }
     if (!r.observationIds.length || !r.custodian) continue; // invalid SF rows etc.
     total++;
     const c = (byCustodian[r.custodian] ??= { balanceCents: 0, accounts: 0, snapshotDate: null, excludedUnknownBalance: 0, excludedConflicting: 0, negativeAccounts: 0, custodianOnlyIncluded: 0 });
@@ -33,7 +36,24 @@ export function computeAum(results: Result[]): AumReport {
     if (has(r, "exact_duplicate")) unresolved.exactDuplicatesCollapsed++;
     if (has(r, "conflicting_duplicate")) { unresolved.conflictingDuplicates++; c.excludedConflicting++; }
     else if (!r.inAum) c.excludedUnknownBalance++;
-    if (has(r, "possible_transfer_overlap")) { unresolved.transferOverlapAccounts++; unresolved.transferOverlapExposureCents += r.balanceCents ?? 0; }
+    if (has(r, "possible_transfer_overlap")) {
+      unresolved.transferOverlapAccounts++;
+      // Count each suspected pair once. The possible double count is the smaller side.
+      const counterparts = r.transferOverlapCounterparts ?? [];
+      if (!counterparts.length) {
+        unresolved.transferOverlapExposureCents += r.balanceCents ?? 0;
+      } else {
+        for (const counterpartKey of counterparts) {
+          const pair = [r.entityKey, counterpartKey].sort().join("|");
+          if (countedTransferPairs.has(pair)) continue;
+          countedTransferPairs.add(pair);
+          const other = byKey.get(counterpartKey);
+          const a = r.balanceCents, b = other?.balanceCents;
+          if (a != null && b != null) unresolved.transferOverlapExposureCents += Math.min(a, b);
+          else unresolved.transferOverlapExposureCents += a ?? b ?? 0;
+        }
+      }
+    }
     if (!r.inAum || r.balanceCents == null) continue;
     included++;
     c.balanceCents += r.balanceCents; c.accounts++; grand += r.balanceCents;
@@ -47,7 +67,7 @@ export function computeAum(results: Result[]): AumReport {
   return {
     label: "Mixed-date, latest-available reported balances (NOT a synchronized point-in-time total; not transfer-adjusted)",
     grandTotalCents: grand, byCustodian, byAdvisor,
-    coverage: { custodianAccountsTotal: total, included, excluded: total - included, salesforceOnlyNotCounted: sfOnly },
+    coverage: { custodianAccountsTotal: total, included, excluded: total - included, salesforceOnlyNotCounted: sfOnly, invalidIdentity: invalid },
     unresolved, advisorDisagreements: dis,
   };
 }

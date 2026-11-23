@@ -21,15 +21,22 @@ export function loadInput(db: Db): ReconInput {
   return { observations, sfAccounts, households, repMap };
 }
 
-/** Run reconciliation and persist results. Idempotent: same inputs reuse the existing run. */
+/** Bump the version when reconciliation semantics change so persisted results are not silently reused. */
+const RECON_POLICY = {
+  version: 2,
+  valuation: "custodian latest snapshot",
+  dedupe: "exact duplicates collapsed; conflicting excluded; undated flagged",
+};
+
+/** Run reconciliation and persist results. Idempotent: same inputs + policy reuse the existing run. */
 export function runReconciliation(db: Db, now = new Date().toISOString()): { runId: number; results: Result[]; reused: boolean } {
   const input = loadInput(db);
   const results = reconcile(input);
-  const fp = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  const fp = createHash("sha256").update(JSON.stringify({ input, policy: RECON_POLICY })).digest("hex");
   const prior = db.prepare("SELECT id FROM recon_runs WHERE input_fingerprint=?").get(fp) as { id: number } | undefined;
   if (prior) return { runId: prior.id, results, reused: true };
   const tx = db.transaction(() => {
-    const runId = Number(db.prepare("INSERT INTO recon_runs(created_at,input_fingerprint,policy) VALUES (?,?,?)").run(now, fp, JSON.stringify({ valuation: "custodian latest snapshot", dedupe: "exact only" })).lastInsertRowid);
+    const runId = Number(db.prepare("INSERT INTO recon_runs(created_at,input_fingerprint,policy) VALUES (?,?,?)").run(now, fp, JSON.stringify(RECON_POLICY)).lastInsertRowid);
     const ins = db.prepare("INSERT INTO recon_results(run_id,entity_key,custodian,account_key,status,balance_cents,in_aum,valuation_date,rep_code,custodian_advisor,sf_advisor,household_sf_id,sf_account_ids,observation_ids,raw_row_refs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     const insE = db.prepare("INSERT INTO recon_exceptions(result_id,code,severity,reason) VALUES (?,?,?,?)");
     for (const r of results) {

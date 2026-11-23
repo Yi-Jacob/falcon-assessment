@@ -9,7 +9,7 @@ async function signIn(formData: FormData) {
   "use server";
   const id = String(formData.get("user"));
   if (!SEEDED_USERS.some((u) => u.id === id)) redirect("/login");
-  (await cookies()).set(COOKIE, makeCookieValue(id), { httpOnly: true, sameSite: "lax", path: "/" });
+  (await cookies()).set(COOKIE, makeCookieValue(id), { httpOnly: true, sameSite: "lax", path: "/", secure: process.env.COOKIE_SECURE === "1" });
   redirect("/");
 }
 

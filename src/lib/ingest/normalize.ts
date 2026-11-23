@@ -38,8 +38,10 @@ export function parseMoneyToCents(raw: string | null | undefined): MoneyParse {
   if (m[1] === "(" && !s.endsWith(")")) return { kind: "invalid", raw: s };
   const whole = m[3].replace(/,/g, "");
   const frac = (m[4] ?? "").padEnd(2, "0");
-  const cents = Number(whole) * 100 + Number(frac);
-  if (!Number.isSafeInteger(cents)) return { kind: "invalid", raw: s };
+  // Integer-only arithmetic: build the cents value with BigInt, then narrow to Number.
+  const centsBig = BigInt(whole) * 100n + BigInt(frac);
+  if (centsBig > BigInt(Number.MAX_SAFE_INTEGER)) return { kind: "invalid", raw: s };
+  const cents = Number(centsBig);
   return { kind: "ok", cents: negative ? -cents : cents };
 }
 

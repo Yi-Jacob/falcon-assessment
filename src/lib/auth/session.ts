@@ -12,7 +12,13 @@ export const SEEDED_USERS: User[] = [
   { id: "tom", name: "Tom Alvarez (Advisor)", role: "advisor", advisorName: "Tom Alvarez" },
 ];
 
-const secret = () => process.env.SESSION_SECRET ?? "dev-only-mock-secret-change-me";
+const DEV_SECRET = "dev-only-mock-secret-change-me";
+const secret = () => {
+  const configured = process.env.SESSION_SECRET;
+  if (configured) return configured;
+  if (process.env.NODE_ENV === "production") throw new Error("SESSION_SECRET must be set in production");
+  return DEV_SECRET;
+};
 const sign = (v: string) => createHmac("sha256", secret()).update(v).digest("hex");
 
 export function makeCookieValue(userId: string): string {
