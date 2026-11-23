@@ -1,0 +1,21 @@
+import { openDb } from "../src/lib/db/db";
+import { loadInput } from "../src/lib/reconciliation/run";
+import { reconcile } from "../src/lib/reconciliation/reconcile";
+import { computeAum, fmtMoney } from "../src/lib/reconciliation/aum";
+
+const db = openDb();
+const results = reconcile(loadInput(db));
+const aum = computeAum(results);
+const out: string[] = [];
+out.push(`# AUM report\n\n**${aum.label}**\n`);
+out.push(`Grand total: **${fmtMoney(aum.grandTotalCents)}**\n`);
+out.push("## By custodian\n\n| Custodian | As-of (row dates) | Accounts counted | Balance | Excluded unknown | Excluded conflicting | Negative | Custodian-only incl. |\n|---|---|---|---|---|---|---|---|");
+for (const [k, v] of Object.entries(aum.byCustodian)) out.push(`| ${k} | ${v.snapshotDate} | ${v.accounts} | ${fmtMoney(v.balanceCents)} | ${v.excludedUnknownBalance} | ${v.excludedConflicting} | ${v.negativeAccounts} | ${v.custodianOnlyIncluded} |`);
+out.push("\n## By advisor (custodian rep-code mapping)\n\n| Advisor | Accounts | Balance |\n|---|---|---|");
+for (const [k, v] of Object.entries(aum.byAdvisor).sort()) out.push(`| ${k} | ${v.accounts} | ${fmtMoney(v.balanceCents)} |`);
+out.push(`\n## Coverage\n\n${JSON.stringify(aum.coverage)}\n\n## Unresolved exposure (not adjusted)\n\n${JSON.stringify({ ...aum.unresolved, transferOverlapExposure: fmtMoney(aum.unresolved.transferOverlapExposureCents) })}\n\nAdvisor disagreements with Salesforce (separate, still counted under custodian advisor): ${aum.advisorDisagreements.count} accounts, ${fmtMoney(aum.advisorDisagreements.balanceCents)}`);
+const counts: Record<string, number> = {};
+for (const r of results) counts[r.status] = (counts[r.status] ?? 0) + 1;
+out.push(`\n## Status counts\n\n${JSON.stringify(counts)}\n\n## Exceptions (${results.reduce((n, r) => n + r.exceptions.length, 0)})\n\n| Account | Status | Code | Severity | Reason |\n|---|---|---|---|---|`);
+for (const r of results) for (const e of r.exceptions) out.push(`| ${r.custodian ?? "?"} ${r.accountKey ?? r.entityKey} | ${r.status} | ${e.code} | ${e.severity} | ${e.reason.replace(/\|/g, "/")} |`);
+console.log(out.join("\n"));
